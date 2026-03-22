@@ -1,0 +1,20 @@
+@import "tailwindcss";
+
+@theme {
+  --font-poppins: var(--font-poppins), sans-serif;
+  --font-inter: var(--font-inter), sans-serif;
+  
+  --color-bg-warm: #FFF7F0;
+  --color-bg-warm-alt: #FEF5E7;
+  --color-primary: #E67E22;
+  --color-primary-coral: #C4451B;
+  --color-secondary: #F4A261;
+  --color-accent: #E9C46A;
+  --color-text-main: #2F2E2E;
+  --color-text-muted: #5A4A42;
+}
+
+body {
+  background-color: var(--color-bg-warm);
+  color: var(--color-text-main);
+}

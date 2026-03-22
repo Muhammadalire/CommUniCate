@@ -1,0 +1,5 @@
+{
+  "name": "Aura - Communication Coach",
+  "description": "A warm, friendly voice assistant to help you practice and improve your communication skills.",
+  "requestFramePermissions": ["microphone"]
+}
