@@ -20,17 +20,19 @@ const INTERESTS = [
   { id: 'Pop', label: 'Pop Culture', icon: Music },
 ];
 
-// Using Fish Audio reference_ids
+// Using SiliconFlow CosyVoice2-0.5B voice IDs
 const VOICES = [
-  '7f92f8afb8ec43bf8142d9eec1e52dbb', // Alex (M)
-  '54a5170264694bfc862bbc0e5d4dda1e', // Sarah (F)
-  '802e3bc2b27e49c2995d23ef70e6ac89', // Henry (M)
+  'FunAudioLLM/CosyVoice2-0.5B:alex',
+  'FunAudioLLM/CosyVoice2-0.5B:bella',
+  'FunAudioLLM/CosyVoice2-0.5B:anna',
+  'FunAudioLLM/CosyVoice2-0.5B:benjamin',
 ];
 
 const VOICE_LABELS: Record<string, string> = {
-  '7f92f8afb8ec43bf8142d9eec1e52dbb': 'Alex (M)',
-  '54a5170264694bfc862bbc0e5d4dda1e': 'Sarah (F)',
-  '802e3bc2b27e49c2995d23ef70e6ac89': 'Henry (M)',
+  'FunAudioLLM/CosyVoice2-0.5B:alex': 'Alex (M)',
+  'FunAudioLLM/CosyVoice2-0.5B:bella': 'Bella (F)',
+  'FunAudioLLM/CosyVoice2-0.5B:anna': 'Anna (F)',
+  'FunAudioLLM/CosyVoice2-0.5B:benjamin': 'Benjamin (M)',
 };
 
 export default function VoiceAssistant() {
@@ -40,7 +42,7 @@ export default function VoiceAssistant() {
 
   const [mode, setMode] = useState('chatty');
   const [interest, setInterest] = useState('General');
-  const [voice, setVoice] = useState(VOICES[1]); // Default to Female
+  const [voice, setVoice] = useState(VOICES[0]); // Default to Alex
 
   const audioCtxRef = useRef<AudioContext | null>(null);
   const audioStreamerRef = useRef<AudioStreamer | null>(null);
@@ -69,6 +71,7 @@ export default function VoiceAssistant() {
 
   const processAIResponse = async (userText: string) => {
     if (!userText.trim()) return;
+    console.log("Sending TTS request for voice:", voice);
 
     // Local context management
     const currentMessages = [...messagesRef.current, { role: 'user', content: userText }];
@@ -88,7 +91,10 @@ export default function VoiceAssistant() {
         })
       });
 
-      if (!response.ok) throw new Error('Failed to get AI response');
+      if (!response.ok) {
+        const errData = await response.json();
+        throw new Error(errData.error || 'Failed to get AI response');
+      }
 
       const data = await response.json();
 
@@ -97,15 +103,14 @@ export default function VoiceAssistant() {
 
       // Play audio
       if (data.audio && audioStreamerRef.current) {
-        // Fish Audio returns PCM 16-bit. The route sends it as base64.
-        // Fish Audio typically uses 44100Hz default for TTS
+        // SiliconFlow returns PCM 16-bit. The route sends it as base64.
         const binaryString = atob(data.audio);
         const len = binaryString.length;
         const bytes = new Uint8Array(len);
         for (let i = 0; i < len; i++) {
           bytes[i] = binaryString.charCodeAt(i);
         }
-        audioStreamerRef.current.addRawPCM16(bytes.buffer, 44100);
+        audioStreamerRef.current.addRawPCM16(bytes.buffer, 32000);
 
         // Manage speaking visual state
         if (speakingTimeoutRef.current) clearTimeout(speakingTimeoutRef.current);
@@ -120,7 +125,7 @@ export default function VoiceAssistant() {
 
     } catch (err: any) {
       console.error("Pipeline Error:", err);
-      // setErrorMessage("Error getting response.");
+      setErrorMessage(err.message || "Error getting response.");
       setIsSpeaking(false);
     }
   };
@@ -458,7 +463,7 @@ export default function VoiceAssistant() {
           {/* Voices */}
           <div>
             <h3 className="text-xs font-bold text-stone-400 uppercase tracking-widest mb-4 flex items-center gap-2">
-              <Mic className="w-4 h-4" /> Fish Audio Voice
+              <Mic className="w-4 h-4" /> SiliconFlow Voice (Free Tier)
             </h3>
             <div className="flex flex-wrap gap-2">
               {VOICES.map((v) => {
@@ -487,7 +492,7 @@ export default function VoiceAssistant() {
         <div className="flex items-start gap-3 max-w-2xl bg-white/40 backdrop-blur-md p-4 rounded-2xl border border-white/60 text-xs text-stone-500 leading-relaxed shadow-sm">
           <Info className="w-5 h-5 shrink-0 mt-0.5 text-stone-400" />
           <p>
-            <strong>Architecture Note:</strong> This version is powered by a low-latency pipeline using <strong>Deepgram Nova-3</strong> for STT, <strong>Groq + Llama 3.3</strong> for intelligence, and <strong>Fish Audio</strong> for TTS.
+            <strong>Architecture Note:</strong> Powered by <strong>Deepgram Nova-3</strong>, <strong>Groq + Llama 3.3</strong>, and <strong>SiliconFlow (CosyVoice2)</strong>.
           </p>
         </div>
       </div>

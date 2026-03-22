@@ -33,7 +33,13 @@ export class AudioStreamer {
   }
 
   private playPCM16Buffer(buffer: ArrayBuffer, sampleRate: number) {
-    const pcm16 = new Int16Array(buffer);
+    // Robustness: Int16Array requires a multiple of 2 bytes.
+    // If we get an odd-length buffer, slice off the last byte.
+    let targetBuffer = buffer;
+    if (buffer.byteLength % 2 !== 0) {
+      targetBuffer = buffer.slice(0, buffer.byteLength - 1);
+    }
+    const pcm16 = new Int16Array(targetBuffer);
 
     const audioBuffer = this.audioCtx.createBuffer(1, pcm16.length, sampleRate);
     const channelData = audioBuffer.getChannelData(0);

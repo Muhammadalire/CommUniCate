@@ -33,35 +33,36 @@ export async function POST(req: NextRequest) {
             });
         }
 
-        // 3. Send text to Fish Audio TTS 
-        // Uses mp3 format by default if not specified; we request PCM 16-bit 24kHz for the streamer
-        const fishVoiceId = voice || '7f92f8afb8ec43bf8142d9eec1e52dbb'; // default to a good male voice if none provided
-        const ttsResponse = await fetch('https://api.fish.audio/v1/tts', {
+        // 3. Send text to SiliconFlow (CosyVoice2-0.5B - Cheaper/Free tier)
+        const voiceId = voice || 'FunAudioLLM/CosyVoice2-0.5B:alex';
+
+        const ttsResponse = await fetch('https://api.siliconflow.com/v1/audio/speech', {
             method: 'POST',
             headers: {
-                Authorization: `Bearer ${process.env.FISH_AUDIO_API_KEY}`,
+                Authorization: `Bearer ${process.env.SILICONFLOW_API_KEY}`,
                 'Content-Type': 'application/json',
             },
             body: JSON.stringify({
-                text: fullText,
-                reference_id: fishVoiceId,
-                format: 'pcm', // Request raw PCM
-                mp3_bitrate: 64, // Ignored for PCM but good to have
-                latency: 'normal'
+                model: 'FunAudioLLM/CosyVoice2-0.5B',
+                input: fullText,
+                voice: voiceId,
+                response_format: 'pcm',
+                sample_rate: 32000,
+                stream: false
             }),
         });
 
         if (!ttsResponse.ok) {
             const errorText = await ttsResponse.text();
-            console.error('Fish Audio TTS error:', errorText);
-            return new Response(JSON.stringify({ error: 'TTS failed' }), {
+            console.error('SiliconFlow TTS error:', errorText);
+            return new Response(JSON.stringify({ error: 'TTS request failed' }), {
                 status: 500,
                 headers: { 'Content-Type': 'application/json' },
             });
         }
 
         // 4. Return audio + text
-        // Fish Audio returns raw binary audio data
+        // SiliconFlow returns raw binary audio data
         const audioBuffer = await ttsResponse.arrayBuffer();
 
         return new Response(
