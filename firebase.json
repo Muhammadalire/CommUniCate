@@ -1,0 +1,14 @@
+{
+  "auth": {
+    "providers": {
+      "emailPassword": true,
+      "googleSignIn": {
+        "oAuthBrandDisplayName": "Communicate",
+        "supportEmail": "muhammad0alire@gmail.com"
+      }
+    }
+  },
+  "database": {
+    "rules": "database.rules.json"
+  }
+}

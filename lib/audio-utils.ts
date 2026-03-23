@@ -68,6 +68,31 @@ export class AudioStreamer {
     };
   }
 
+  // Decompresses and plays standard audio formats (MP3, WAV, etc.)
+  async addEncodedAudio(buffer: ArrayBuffer) {
+    try {
+      const audioBuffer = await this.audioCtx.decodeAudioData(buffer);
+      const source = this.audioCtx.createBufferSource();
+      source.buffer = audioBuffer;
+      source.connect(this.audioCtx.destination);
+
+      if (this.nextPlayTime < this.audioCtx.currentTime) {
+        this.nextPlayTime = this.audioCtx.currentTime + 0.05;
+      }
+
+      source.start(this.nextPlayTime);
+      this.nextPlayTime += audioBuffer.duration;
+
+      this.activeSources.push(source);
+      source.onended = () => {
+        const idx = this.activeSources.indexOf(source);
+        if (idx > -1) this.activeSources.splice(idx, 1);
+      };
+    } catch (error) {
+      console.error("Error decoding audio:", error);
+    }
+  }
+
   stop() {
     // Stop all currently playing/scheduled audio sources
     this.activeSources.forEach((source) => {

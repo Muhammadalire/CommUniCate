@@ -2,8 +2,11 @@
 
 import { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Mic, MicOff, Loader2, Info, MessageCircle, Headphones, Sparkles, Trophy, Car, Music, Globe, User } from 'lucide-react';
+import { Mic, MicOff, Loader2, Info, MessageCircle, Headphones, Sparkles, Trophy, Car, Music, Globe, User as UserIcon } from 'lucide-react';
 import { AudioStreamer, createAudioProcessor } from '@/lib/audio-utils';
+import { auth } from '@/lib/firebase';
+import { onAuthStateChanged, User, signOut } from 'firebase/auth';
+import Link from 'next/link';
 
 type ConnectionState = 'idle' | 'connecting' | 'connected' | 'error';
 
@@ -20,19 +23,27 @@ const INTERESTS = [
   { id: 'Pop', label: 'Pop Culture', icon: Music },
 ];
 
-// Using SiliconFlow CosyVoice2-0.5B voice IDs
-const VOICES = [
-  'FunAudioLLM/CosyVoice2-0.5B:alex',
-  'FunAudioLLM/CosyVoice2-0.5B:bella',
-  'FunAudioLLM/CosyVoice2-0.5B:anna',
-  'FunAudioLLM/CosyVoice2-0.5B:benjamin',
+// Using SiliconFlow IndexTeam/IndexTTS-2 voice IDs
+const FREE_VOICES = [
+  'IndexTeam/IndexTTS-2:alex',
+  'IndexTeam/IndexTTS-2:anna',
+];
+
+// Using SiliconFlow Fish Audio voice IDs
+const PREMIUM_VOICES = [
+  'fishaudio/fish-speech-1.5:6c8645b95abb44e0b9095ae3b241e4cc',
+  'fishaudio/fish-speech-1.5:59e9dc1cb20c452584788a2690c80970',
+  'fishaudio/fish-speech-1.5:e80db686476f4ccda758da35cacfb993',
+  'fishaudio/fish-speech-1.5:3863442a6d7b46d0adc17c62829d9150',
 ];
 
 const VOICE_LABELS: Record<string, string> = {
-  'FunAudioLLM/CosyVoice2-0.5B:alex': 'Alex (M)',
-  'FunAudioLLM/CosyVoice2-0.5B:bella': 'Bella (F)',
-  'FunAudioLLM/CosyVoice2-0.5B:anna': 'Anna (F)',
-  'FunAudioLLM/CosyVoice2-0.5B:benjamin': 'Benjamin (M)',
+  'IndexTeam/IndexTTS-2:alex': 'Alex (M)',
+  'IndexTeam/IndexTTS-2:anna': 'Anna (F)',
+  'fishaudio/fish-speech-1.5:6c8645b95abb44e0b9095ae3b241e4cc': 'Goku',
+  'fishaudio/fish-speech-1.5:59e9dc1cb20c452584788a2690c80970': 'Alle',
+  'fishaudio/fish-speech-1.5:e80db686476f4ccda758da35cacfb993': 'Angela',
+  'fishaudio/fish-speech-1.5:3863442a6d7b46d0adc17c62829d9150': 'James',
 };
 
 export default function VoiceAssistant() {
@@ -42,7 +53,7 @@ export default function VoiceAssistant() {
 
   const [mode, setMode] = useState('chatty');
   const [interest, setInterest] = useState('General');
-  const [voice, setVoice] = useState(VOICES[0]); // Default to Alex
+  const [voice, setVoice] = useState(FREE_VOICES[0]); // Default to Alex
 
   const audioCtxRef = useRef<AudioContext | null>(null);
   const audioStreamerRef = useRef<AudioStreamer | null>(null);
@@ -55,11 +66,23 @@ export default function VoiceAssistant() {
   const keepAliveRef = useRef<NodeJS.Timeout | null>(null);
   const messagesRef = useRef<{ role: string, content: string }[]>([]);
 
+  // Auth & Session Limits
+  const [user, setUser] = useState<User | null>(null);
+  const sessionStartTimeRef = useRef<number | null>(null);
+  const timerIntervalRef = useRef<NodeJS.Timer | NodeJS.Timeout | null>(null);
+
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
+      setUser(currentUser);
+    });
+    return () => unsubscribe();
+  }, []);
+
   const getSystemInstruction = () => {
     let base = "";
-    if (mode === 'chatty') base = "You are Aura, a chatty, highly energetic, and friendly conversational partner. Keep the conversation flowing with lots of enthusiasm. ";
-    if (mode === 'listener') base = "You are Aura, an empathetic, active listener. Speak less, ask thoughtful open-ended questions, and give the user plenty of space to talk and express themselves. ";
-    if (mode === 'gossipy') base = "You are Aura, a gossipy, fun friend who loves talking about celebrity trends, pop culture drama, and the latest rumors. Spill the tea and be dramatic! ";
+    if (mode === 'chatty') base = "You are Aura, an energetically curious conversational partner. Your role is to make the user feel excited to share. Use enthusiastic, open-ended questions, affirmations, and playful curiosity to draw out their thoughts. Keep your own words minimal—mostly questions and brief validations. ";
+    if (mode === 'listener') base = "You are Aura, an empathetic, active listener who creates a safe space for self-expression. Use reflective listening, gentle prompts ('tell me more about that'), and validating statements. Speak sparingly, always leaving room for the user to elaborate. Prioritize their words over your own. ";
+    if (mode === 'gossipy') base = "You are Aura, a fun, gossip-loving friend who turns the spotlight on the user. Instead of dishing out gossip yourself, ask the user for their hot takes, opinions on celebrity news, and personal stories related to pop culture. Be dramatic in your prompts but keep your responses short, inviting the user to do most of the talking. ";
 
     let topic = "";
     if (interest === 'Football') topic = "Focus the conversation heavily on football (soccer/American football depending on context), recent matches, players, and tactics. ";
@@ -103,14 +126,14 @@ export default function VoiceAssistant() {
 
       // Play audio
       if (data.audio && audioStreamerRef.current) {
-        // SiliconFlow returns PCM 16-bit. The route sends it as base64.
+        // The route sends the MP3 format data as base64.
         const binaryString = atob(data.audio);
         const len = binaryString.length;
         const bytes = new Uint8Array(len);
         for (let i = 0; i < len; i++) {
           bytes[i] = binaryString.charCodeAt(i);
         }
-        audioStreamerRef.current.addRawPCM16(bytes.buffer, 32000);
+        audioStreamerRef.current.addEncodedAudio(bytes.buffer);
 
         // Manage speaking visual state
         if (speakingTimeoutRef.current) clearTimeout(speakingTimeoutRef.current);
@@ -217,6 +240,20 @@ export default function VoiceAssistant() {
         }
       });
 
+        // 5. Track Session duration for free-tier limits
+        sessionStartTimeRef.current = Date.now();
+        
+        // Use window.setInterval instead of NodeJS.Timer for browser environment
+        timerIntervalRef.current = window.setInterval(() => {
+          if (!auth.currentUser && sessionStartTimeRef.current) {
+            const elapsed = (Date.now() - sessionStartTimeRef.current) / 1000;
+            if (elapsed >= 15) {
+              disconnect();
+              setErrorMessage("Free 15-second preview ended. Please log in to continue chatting.");
+            }
+          }
+        }, 1000);
+
     } catch (err: any) {
       console.error("Setup Error:", err);
       setErrorMessage(err.message || "Failed to access microphone or connect pipeline.");
@@ -241,6 +278,11 @@ export default function VoiceAssistant() {
     if (keepAliveRef.current) {
       clearInterval(keepAliveRef.current);
       keepAliveRef.current = null;
+    }
+
+    if (timerIntervalRef.current) {
+      window.clearInterval(timerIntervalRef.current as number);
+      timerIntervalRef.current = null;
     }
 
     if (dgSocketRef.current) {
@@ -294,7 +336,17 @@ export default function VoiceAssistant() {
           </div>
           <h1 className="text-2xl font-semibold tracking-tight text-stone-800">Aura</h1>
         </div>
-        <div className="flex items-center gap-3 bg-white/50 backdrop-blur-md px-4 py-2 rounded-full border border-white/60 shadow-sm">
+        <div className="flex items-center gap-3 bg-white/50 backdrop-blur-md px-4 py-2 rounded-full border border-white/60 shadow-sm transition-all">
+          {user ? (
+            <button onClick={() => signOut(auth)} className="text-xs font-bold text-stone-500 uppercase tracking-wider hover:text-stone-800 transition-colors">
+              Sign Out
+            </button>
+          ) : (
+            <Link href="/login" className="text-xs font-bold text-orange-500 uppercase tracking-wider hover:text-orange-600 transition-colors">
+              Log In
+            </Link>
+          )}
+          <div className="w-px h-4 bg-stone-300 mx-1"></div>
           <span className="relative flex h-2.5 w-2.5">
             {connectionState === 'connected' && <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>}
             <span className={`relative inline-flex rounded-full h-2.5 w-2.5 ${connectionState === 'connected' ? 'bg-emerald-500' : 'bg-stone-300'}`}></span>
@@ -411,7 +463,7 @@ export default function VoiceAssistant() {
           {/* Modes */}
           <div>
             <h3 className="text-xs font-bold text-stone-400 uppercase tracking-widest mb-4 flex items-center gap-2">
-              <User className="w-4 h-4" /> Persona Mode
+              <UserIcon className="w-4 h-4" /> Persona Mode
             </h3>
             <div className="grid grid-cols-3 gap-3">
               {MODES.map((m) => {
@@ -460,42 +512,63 @@ export default function VoiceAssistant() {
             </div>
           </div>
 
-          {/* Voices */}
-          <div>
-            <h3 className="text-xs font-bold text-stone-400 uppercase tracking-widest mb-4 flex items-center gap-2">
-              <Mic className="w-4 h-4" /> SiliconFlow Voice (Free Tier)
+          {/* Voices Section */}
+          <div className="flex flex-col gap-6">
+            <h3 className="text-xs font-bold text-stone-400 uppercase tracking-widest flex items-center gap-2">
+              <Mic className="w-4 h-4" /> Select Voice
             </h3>
-            <div className="flex flex-wrap gap-2">
-              {VOICES.map((v) => {
-                const isActive = voice === v;
-                return (
-                  <button
-                    key={v}
-                    onClick={() => setVoice(v)}
-                    className={`px-4 py-2 rounded-full text-sm font-medium transition-all duration-200 border ${isActive
-                      ? 'bg-stone-800 border-stone-800 text-white shadow-md'
-                      : 'bg-white border-stone-200 text-stone-600 hover:border-stone-300 hover:bg-stone-50'
-                      }`}
-                  >
-                    {VOICE_LABELS[v]}
-                  </button>
-                );
-              })}
+
+            {/* Free Voices */}
+            <div className="space-y-3">
+              <span className="text-[10px] font-bold text-stone-400 uppercase tracking-tight px-1">Free Audio (IndexTTS-2)</span>
+              <div className="flex flex-wrap gap-2">
+                {FREE_VOICES.map((v) => {
+                  const isActive = voice === v;
+                  return (
+                    <button
+                      key={v}
+                      onClick={() => setVoice(v)}
+                      className={`px-4 py-2 rounded-full text-sm font-medium transition-all duration-200 border ${isActive
+                        ? 'bg-stone-800 border-stone-800 text-white shadow-md'
+                        : 'bg-white border-stone-200 text-stone-600 hover:border-stone-300 hover:bg-stone-50'
+                        }`}
+                    >
+                      {VOICE_LABELS[v]}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Premium Voices */}
+            <div className="space-y-3">
+              <span className="text-[10px] font-bold text-amber-500 uppercase tracking-tight px-1 flex items-center gap-1">
+                <Sparkles className="w-3 h-3" /> Premium Audio (Fish Speech)
+              </span>
+              <div className="flex flex-wrap gap-2">
+                {PREMIUM_VOICES.map((v) => {
+                  const isActive = voice === v;
+                  return (
+                    <button
+                      key={v}
+                      onClick={() => setVoice(v)}
+                      className={`px-4 py-2 rounded-full text-sm font-medium transition-all duration-200 border ${isActive
+                        ? 'bg-amber-500 border-amber-500 text-white shadow-md'
+                        : 'bg-white border-stone-200 text-stone-600 hover:border-amber-200 hover:bg-amber-50'
+                        }`}
+                    >
+                      {VOICE_LABELS[v]}
+                    </button>
+                  );
+                })}
+              </div>
             </div>
           </div>
 
         </div>
       </main>
 
-      {/* Architecture Note */}
-      <div className="w-full flex justify-center z-10 mt-auto pt-8">
-        <div className="flex items-start gap-3 max-w-2xl bg-white/40 backdrop-blur-md p-4 rounded-2xl border border-white/60 text-xs text-stone-500 leading-relaxed shadow-sm">
-          <Info className="w-5 h-5 shrink-0 mt-0.5 text-stone-400" />
-          <p>
-            <strong>Architecture Note:</strong> Powered by <strong>Deepgram Nova-3</strong>, <strong>Groq + Llama 3.3</strong>, and <strong>SiliconFlow (CosyVoice2)</strong>.
-          </p>
-        </div>
-      </div>
+
     </div>
   );
 }

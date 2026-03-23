@@ -33,8 +33,8 @@ export async function POST(req: NextRequest) {
             });
         }
 
-        // 3. Send text to SiliconFlow (CosyVoice2-0.5B - Cheaper/Free tier)
-        const voiceId = voice || 'FunAudioLLM/CosyVoice2-0.5B:alex';
+        // 3. Send text to SiliconFlow (IndexTeam/IndexTTS-2 - New/Higher Quality)
+        const voiceId = voice || 'IndexTeam/IndexTTS-2:alex';
 
         const ttsResponse = await fetch('https://api.siliconflow.com/v1/audio/speech', {
             method: 'POST',
@@ -43,11 +43,10 @@ export async function POST(req: NextRequest) {
                 'Content-Type': 'application/json',
             },
             body: JSON.stringify({
-                model: 'FunAudioLLM/CosyVoice2-0.5B',
+                model: 'IndexTeam/IndexTTS-2',
                 input: fullText,
                 voice: voiceId,
-                response_format: 'pcm',
-                sample_rate: 32000,
+                response_format: 'mp3',
                 stream: false
             }),
         });
