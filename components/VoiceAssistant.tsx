@@ -36,11 +36,10 @@ const PREMIUM_VOICES = [
   'fishaudio/fish-speech-1.5:e80db686476f4ccda758da35cacfb993',
   'fishaudio/fish-speech-1.5:3863442a6d7b46d0adc17c62829d9150',
 ];
-// Using Xiaomi Mimo TTS voice IDs
+// Using Xiaomi Mimo TTS custom voice styles
 const TEST_VOICES = [
-  'mimo-v2-tts:mimo_default',
-  'mimo-v2-tts:mimo_warm',
-  'mimo-v2-tts:mimo_pro',
+  'mimo-v2-tts:mimo_soft_young_male',
+  'mimo-v2-tts:mimo_passionate_young_male',
 ];
 const VOICE_LABELS: Record<string, string> = {
   'IndexTeam/IndexTTS-2:alex': 'Alex (M)',
@@ -49,9 +48,8 @@ const VOICE_LABELS: Record<string, string> = {
   'fishaudio/fish-speech-1.5:59e9dc1cb20c452584788a2690c80970': 'Alle',
   'fishaudio/fish-speech-1.5:e80db686476f4ccda758da35cacfb993': 'Angela',
   'fishaudio/fish-speech-1.5:3863442a6d7b46d0adc17c62829d9150': 'James',
-  'mimo-v2-tts:mimo_default': 'MiMo Default',
-  'mimo-v2-tts:mimo_warm': 'MiMo Warm',
-  'mimo-v2-tts:mimo_pro': 'MiMo Pro',
+  'mimo-v2-tts:mimo_soft_young_male': 'MiMo Soft (M)',
+  'mimo-v2-tts:mimo_passionate_young_male': 'MiMo Passionate (M)',
 
 };
 
@@ -102,7 +100,7 @@ export default function VoiceAssistant() {
     if (interest === 'Cars') topic = "Focus the conversation heavily on cars, automotive trends, racing, and vehicle mechanics. ";
     if (interest === 'Pop') topic = "Focus the conversation on pop culture, movies, music, and trending internet topics. ";
 
-    return base + topic + "Keep your responses brief (1-3 sentences) to encourage a back-and-forth dialogue. Do not sound robotic or overly formal. Respond directly to the user's input.";
+    return base + topic + "You are Aura. You must use paralinguistic tags to sound human. If you are thinking, use '... um...'. If you find something funny, use '(laughs)'. If a topic is heavy, start with '[sigh]'. Use ALL CAPS for emphasis on exactly one word per paragraph. Do not overdo it—keep it natural. Keep your responses brief (1-3 sentences) to encourage a back-and-forth dialogue. Do not sound robotic or overly formal. Respond directly to the user's input. Use more ellipses (...) for natural pauses and pacing.";
   };
 
   const processAIResponse = async (userText: string) => {
@@ -139,14 +137,15 @@ export default function VoiceAssistant() {
 
       // Play audio
       if (data.audio && audioStreamerRef.current) {
-        // The route sends the MP3 format data as base64.
+        // The route sends audio data as base64 (WAV for Mimo, MP3 for SiliconFlow).
         const binaryString = atob(data.audio);
         const len = binaryString.length;
         const bytes = new Uint8Array(len);
         for (let i = 0; i < len; i++) {
           bytes[i] = binaryString.charCodeAt(i);
         }
-        audioStreamerRef.current.addEncodedAudio(bytes.buffer);
+        console.log("Playing audio, size:", len, "bytes");
+        await audioStreamerRef.current.addEncodedAudio(bytes.buffer);
 
         // Manage speaking visual state
         if (speakingTimeoutRef.current) clearTimeout(speakingTimeoutRef.current);
@@ -168,20 +167,35 @@ export default function VoiceAssistant() {
 
   const startRecording = () => {
     if (isRecordingRef.current || !mediaStreamRef.current) return;
+    console.log('[REC] Starting recording...');
     isRecordingRef.current = true;
     audioChunksRef.current = [];
 
-    const recorder = new MediaRecorder(mediaStreamRef.current);
+    const mimeType = MediaRecorder.isTypeSupported('audio/ogg;codecs=opus')
+      ? 'audio/ogg;codecs=opus'
+      : MediaRecorder.isTypeSupported('audio/mp4')
+        ? 'audio/mp4'
+        : MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
+          ? 'audio/webm;codecs=opus'
+          : '';
+
+    const recorder = new MediaRecorder(mediaStreamRef.current, mimeType ? { mimeType } : {});
+    console.log('[REC] Recorder started with mimeType:', recorder.mimeType);
+    
     recorder.ondataavailable = (e) => {
       if (e.data.size > 0) audioChunksRef.current.push(e.data);
     };
     recorder.onstop = async () => {
       isRecordingRef.current = false;
-      const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
+      const audioBlob = new Blob(audioChunksRef.current, { type: recorder.mimeType || 'audio/webm' });
       audioChunksRef.current = [];
+      console.log('[REC] Recording stopped, blob size:', audioBlob.size, 'type:', audioBlob.type);
       
       // Skip empty or very short audio 
-      if (audioBlob.size < 1000) return;
+      if (audioBlob.size < 1000) {
+        console.log('[REC] Skipping - too short');
+        return;
+      }
 
       if (audioStreamerRef.current?.isPlaying()) {
         audioStreamerRef.current.stop();
@@ -190,7 +204,10 @@ export default function VoiceAssistant() {
 
       try {
         const formData = new FormData();
-        formData.append('file', audioBlob, 'audio.webm');
+        const extension = audioBlob.type.includes('ogg') ? 'ogg' : 
+                          audioBlob.type.includes('mp4') ? 'm4a' : 
+                          'webm';
+        formData.append('file', audioBlob, `audio.${extension}`);
 
         const res = await fetch('/api/transcribe', {
           method: 'POST',
@@ -226,10 +243,9 @@ export default function VoiceAssistant() {
       setErrorMessage('');
       messagesRef.current = []; // clear history on new session
 
-      // 1. Initialize Audio Context
+      // 1. Initialize Audio Context with 24000Hz for MiMo compatibility
       const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
-      // We process microphone at 16000Hz for Deepgram Speech-to-Text
-      const audioCtx = new AudioContextClass({ sampleRate: 16000 });
+      const audioCtx = new AudioContextClass({ sampleRate: 24000 });
       await audioCtx.resume();
       audioCtxRef.current = audioCtx;
 
@@ -242,13 +258,16 @@ export default function VoiceAssistant() {
 
       // 3. Setup Groq Whisper VAD via Analyser
       const analyser = audioCtx.createAnalyser();
-      analyser.minDecibels = -45;
+      analyser.fftSize = 512;
+      analyser.minDecibels = -90;
+      analyser.maxDecibels = -10;
       const source = audioCtx.createMediaStreamSource(stream);
       source.connect(analyser);
 
       const bufferLength = analyser.frequencyBinCount;
       const dataArray = new Uint8Array(bufferLength);
 
+      let vadLogCounter = 0;
       vadIntervalRef.current = setInterval(() => {
         analyser.getByteFrequencyData(dataArray);
         let sum = 0;
@@ -256,13 +275,26 @@ export default function VoiceAssistant() {
           sum += dataArray[i];
         }
         const average = sum / bufferLength;
+        const isAudioPlaying = audioStreamerRef.current?.isPlaying() ?? false;
 
-        if (average > 10) {
+        // Debug log every ~2s (40 * 50ms)
+        vadLogCounter++;
+        if (vadLogCounter % 40 === 0) {
+          console.log(`[VAD] avg=${average.toFixed(1)} recording=${isRecordingRef.current} playing=${isAudioPlaying}`);
+        }
+
+        if (average > 3) {
           if (silenceTimerRef.current) {
             clearTimeout(silenceTimerRef.current);
             silenceTimerRef.current = null;
           }
-          if (!isRecordingRef.current && !audioStreamerRef.current?.isPlaying()) {
+          if (!isRecordingRef.current) {
+            // If audio is playing and user speaks, barge-in: stop playback first
+            if (isAudioPlaying) {
+              console.log("[VAD] Barge-in: stopping playback to record user speech");
+              audioStreamerRef.current?.stop();
+              setIsSpeaking(false);
+            }
             startRecording();
           }
         } else {
@@ -270,7 +302,7 @@ export default function VoiceAssistant() {
             silenceTimerRef.current = setTimeout(() => {
               stopRecording();
               silenceTimerRef.current = null;
-            }, 1500); // 1.5 seconds of silence = end utterance
+            }, 1200); // 1.2 seconds of silence = end utterance
           }
         }
       }, 50);

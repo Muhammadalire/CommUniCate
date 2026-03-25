@@ -46,7 +46,28 @@ export async function POST(req: NextRequest) {
 
         if (voiceId.startsWith('mimo')) {
             // 3a. Send text to Mimo TTS
-            const voiceName = voiceId.split(':')[1] || 'mimo_default';
+            const rawVoiceName = voiceId.split(':')[1] || 'mimo_default';
+
+            // Map custom style IDs to natural language style descriptions.
+            // The description goes in the user message as a style instruction.
+            // The voice parameter must be one of: mimo_default, default_zh, default_en.
+            const customStyleMap: Record<string, string> = {
+                'mimo_soft_young_male':
+                    'A "whisper-adjacent" male voice. Very high breathiness, low vocal effort. Speak as if inches away from a microphone. Naturally includes subtle [lip_smack] and [breath] cues between sentences. Words ending in vowels should trail off slightly... like this...',
+                'mimo_passionate_young_male':
+                    'High-energy, "bright" tenor male. Fast onset of words with crisp plosives (p, t, k). Use dynamic volume shifts—louder on key verbs. Naturally includes (chuckles) when delivering positive news and quick [sharp_inhale] before long explanations to show excitement.'
+            };
+
+            const isCustomStyle = rawVoiceName in customStyleMap;
+            const userPrompt = isCustomStyle
+                ? customStyleMap[rawVoiceName]
+                : 'Please read this aloud.';
+            // Custom styles use mimo_default as the base voice; standard voices pass through directly
+            const ttsVoice = isCustomStyle ? 'mimo_default' : rawVoiceName;
+
+            // Apply realism enhancements to the text
+            const enhancedText = enhanceRealism(fullText);
+
             const ttsResponse = await fetch('https://api.xiaomimimo.com/v1/chat/completions', {
                 method: 'POST',
                 headers: {
@@ -56,12 +77,12 @@ export async function POST(req: NextRequest) {
                 body: JSON.stringify({
                     model: 'mimo-v2-tts',
                     messages: [
-                        { role: 'user', content: 'Please read this aloud.' },
-                        { role: 'assistant', content: fullText }
+                        { role: 'user', content: userPrompt },
+                        { role: 'assistant', content: enhancedText }
                     ],
                     audio: {
                         format: 'wav',
-                        voice: voiceName
+                        voice: ttsVoice
                     }
                 }),
             });
@@ -110,7 +131,7 @@ export async function POST(req: NextRequest) {
 
             if (!sfResponse.ok) {
                 console.error('SiliconFlow TTS error:', await sfResponse.text());
-                 return new Response(JSON.stringify({ error: 'SiliconFlow TTS failed' }), { status: 500, headers: { 'Content-Type': 'application/json' } });
+                return new Response(JSON.stringify({ error: 'SiliconFlow TTS failed' }), { status: 500, headers: { 'Content-Type': 'application/json' } });
             }
             const audioBuffer = await sfResponse.arrayBuffer();
             audioBase64 = Buffer.from(audioBuffer).toString('base64');
@@ -131,4 +152,16 @@ export async function POST(req: NextRequest) {
             { status: 500, headers: { 'Content-Type': 'application/json' } }
         );
     }
+}
+function enhanceRealism(text: string): string {
+    // Randomly adds a breath or a "thinking" pause if the sentence is long
+    if (text.length > 50 && !text.includes('[')) {
+        return `[breath] ${text.replace('. ', '. [pause] ')}`;
+    }
+
+    // Add a natural reaction based on keywords
+    return text
+        .replace(/wait/gi, "Wait... [sharp_inhale]")
+        .replace(/sorry/gi, "[sigh] sorry")
+        .replace(/haha|lol/gi, "(chuckles)");
 }

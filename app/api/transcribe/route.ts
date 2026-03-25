@@ -9,9 +9,18 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'No audio file provided' }, { status: 400 });
     }
 
-        const arrayBuffer = await file.arrayBuffer();
-        const base64Audio = Buffer.from(arrayBuffer).toString('base64');
-        const dataUri = `data:audio/webm;base64,${base64Audio}`;
+    const arrayBuffer = await file.arrayBuffer();
+    const base64Audio = Buffer.from(arrayBuffer).toString('base64');
+    
+    // Dynamically detect the mime type for the data URI
+    const fileExtension = file.name?.split('.').pop()?.toLowerCase();
+    const mimeType = file.type || 
+                     (fileExtension === 'ogg' ? 'audio/ogg' : 
+                      fileExtension === 'm4a' ? 'audio/mp4' : 
+                      'audio/webm');
+    
+    const dataUri = `data:${mimeType};base64,${base64Audio}`;
+    console.log('STT: Uploaded file type:', file.type, 'Extension:', fileExtension, 'Used MimeType:', mimeType);
 
         const mimoResponse = await fetch('https://api.xiaomimimo.com/v1/chat/completions', {
             method: 'POST',
