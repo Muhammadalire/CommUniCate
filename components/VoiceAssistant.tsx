@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Mic, MicOff, Loader2, Info, MessageCircle, Headphones, Sparkles, Trophy, Car, Music, Globe, User as UserIcon } from 'lucide-react';
+import { Mic, MicOff, Loader2, MessageCircle, Headphones, Sparkles, Trophy, Car, Music, Globe, User as UserIcon } from 'lucide-react';
 import { AudioStreamer, createAudioProcessor } from '@/lib/audio-utils';
 import { auth } from '@/lib/firebase';
 import { onAuthStateChanged, User, signOut } from 'firebase/auth';
@@ -36,7 +36,12 @@ const PREMIUM_VOICES = [
   'fishaudio/fish-speech-1.5:e80db686476f4ccda758da35cacfb993',
   'fishaudio/fish-speech-1.5:3863442a6d7b46d0adc17c62829d9150',
 ];
-
+// Using Xiaomi Mimo TTS voice IDs
+const TEST_VOICES = [
+  'mimo-v2-tts:mimo_default',
+  'mimo-v2-tts:mimo_warm',
+  'mimo-v2-tts:mimo_pro',
+];
 const VOICE_LABELS: Record<string, string> = {
   'IndexTeam/IndexTTS-2:alex': 'Alex (M)',
   'IndexTeam/IndexTTS-2:anna': 'Anna (F)',
@@ -44,6 +49,10 @@ const VOICE_LABELS: Record<string, string> = {
   'fishaudio/fish-speech-1.5:59e9dc1cb20c452584788a2690c80970': 'Alle',
   'fishaudio/fish-speech-1.5:e80db686476f4ccda758da35cacfb993': 'Angela',
   'fishaudio/fish-speech-1.5:3863442a6d7b46d0adc17c62829d9150': 'James',
+  'mimo-v2-tts:mimo_default': 'MiMo Default',
+  'mimo-v2-tts:mimo_warm': 'MiMo Warm',
+  'mimo-v2-tts:mimo_pro': 'MiMo Pro',
+
 };
 
 export default function VoiceAssistant() {
@@ -59,17 +68,21 @@ export default function VoiceAssistant() {
   const audioStreamerRef = useRef<AudioStreamer | null>(null);
   const mediaStreamRef = useRef<MediaStream | null>(null);
   const processorRef = useRef<{ stop: () => void } | null>(null);
-  const speakingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const speakingTimeoutRef = useRef<any>(null);
 
-  // Pipeline State
-  const dgSocketRef = useRef<WebSocket | null>(null);
-  const keepAliveRef = useRef<NodeJS.Timeout | null>(null);
   const messagesRef = useRef<{ role: string, content: string }[]>([]);
+  
+  // VAD & Recording State
+  const isRecordingRef = useRef(false);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const audioChunksRef = useRef<Blob[]>([]);
+  const silenceTimerRef = useRef<any>(null);
+  const vadIntervalRef = useRef<any>(null);
 
   // Auth & Session Limits
   const [user, setUser] = useState<User | null>(null);
   const sessionStartTimeRef = useRef<number | null>(null);
-  const timerIntervalRef = useRef<NodeJS.Timer | NodeJS.Timeout | null>(null);
+  const timerIntervalRef = useRef<any>(null);
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
@@ -153,61 +166,58 @@ export default function VoiceAssistant() {
     }
   };
 
-  const setupDeepgramWebSocket = () => {
-    const apiKey = process.env.NEXT_PUBLIC_DEEPGRAM_API_KEY;
-    if (!apiKey) {
-      throw new Error("Missing NEXT_PUBLIC_DEEPGRAM_API_KEY in .env.local");
-    }
+  const startRecording = () => {
+    if (isRecordingRef.current || !mediaStreamRef.current) return;
+    isRecordingRef.current = true;
+    audioChunksRef.current = [];
 
-    const socket = new WebSocket('wss://api.deepgram.com/v1/listen?encoding=linear16&sample_rate=16000&channels=1', [
-      'token',
-      apiKey,
-    ]);
-
-    socket.onopen = () => {
-      setConnectionState('connected');
-
-      // Keep-alive heartbeat (Deepgram closes socket after 10s of silence otherwise)
-      keepAliveRef.current = setInterval(() => {
-        if (socket.readyState === WebSocket.OPEN) {
-          socket.send(JSON.stringify({ type: 'KeepAlive' }));
-        }
-      }, 5000);
-
-      // Trigger initial greeting via the pipeline
-      processAIResponse("Hello! Please introduce yourself and start our conversation.");
+    const recorder = new MediaRecorder(mediaStreamRef.current);
+    recorder.ondataavailable = (e) => {
+      if (e.data.size > 0) audioChunksRef.current.push(e.data);
     };
+    recorder.onstop = async () => {
+      isRecordingRef.current = false;
+      const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
+      audioChunksRef.current = [];
+      
+      // Skip empty or very short audio 
+      if (audioBlob.size < 1000) return;
 
-    socket.onmessage = (message) => {
-      const received = JSON.parse(message.data);
-      const transcript = received.channel?.alternatives[0]?.transcript;
+      if (audioStreamerRef.current?.isPlaying()) {
+        audioStreamerRef.current.stop();
+        setIsSpeaking(false);
+      }
 
-      if (transcript && received.is_final) {
-        console.log("Transcribed:", transcript);
+      try {
+        const formData = new FormData();
+        formData.append('file', audioBlob, 'audio.webm');
 
-        // Interruption handling (if user speaks while AI is playing)
-        if (audioStreamerRef.current?.isPlaying()) {
-          audioStreamerRef.current.stop();
-          setIsSpeaking(false);
+        const res = await fetch('/api/transcribe', {
+          method: 'POST',
+          body: formData
+        });
+
+        if (res.ok) {
+          const data = await res.json();
+          if (data.text && data.text.trim()) {
+            console.log("Transcribed:", data.text);
+            processAIResponse(data.text);
+          }
+        } else {
+          console.error("Transcription failed", await res.text());
         }
-
-        processAIResponse(transcript);
+      } catch (e) {
+        console.error("Failed to send transcription", e);
       }
     };
+    mediaRecorderRef.current = recorder;
+    recorder.start();
+  };
 
-    socket.onclose = () => {
-      console.log("Deepgram socket closed");
-      disconnect();
-    };
-
-    socket.onerror = (error) => {
-      console.error("Deepgram Socket Error:", error);
-      setErrorMessage("Microphone connection error. Please check your API key.");
-      disconnect();
-    };
-
-    dgSocketRef.current = socket;
-    return socket;
+  const stopRecording = () => {
+    if (mediaRecorderRef.current && isRecordingRef.current) {
+      mediaRecorderRef.current.stop();
+    }
   };
 
   const connect = async () => {
@@ -230,15 +240,45 @@ export default function VoiceAssistant() {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       mediaStreamRef.current = stream;
 
-      // 3. Setup Deepgram STT WebSocket
-      const socket = setupDeepgramWebSocket();
+      // 3. Setup Groq Whisper VAD via Analyser
+      const analyser = audioCtx.createAnalyser();
+      analyser.minDecibels = -45;
+      const source = audioCtx.createMediaStreamSource(stream);
+      source.connect(analyser);
 
-      // 4. Start processing microphone data
-      processorRef.current = createAudioProcessor(audioCtx, stream, (rawPcmBuffer) => {
-        if (socket.readyState === WebSocket.OPEN) {
-          socket.send(rawPcmBuffer);
+      const bufferLength = analyser.frequencyBinCount;
+      const dataArray = new Uint8Array(bufferLength);
+
+      vadIntervalRef.current = setInterval(() => {
+        analyser.getByteFrequencyData(dataArray);
+        let sum = 0;
+        for (let i = 0; i < bufferLength; i++) {
+          sum += dataArray[i];
         }
-      });
+        const average = sum / bufferLength;
+
+        if (average > 10) {
+          if (silenceTimerRef.current) {
+            clearTimeout(silenceTimerRef.current);
+            silenceTimerRef.current = null;
+          }
+          if (!isRecordingRef.current && !audioStreamerRef.current?.isPlaying()) {
+            startRecording();
+          }
+        } else {
+          if (isRecordingRef.current && !silenceTimerRef.current) {
+            silenceTimerRef.current = setTimeout(() => {
+              stopRecording();
+              silenceTimerRef.current = null;
+            }, 1500); // 1.5 seconds of silence = end utterance
+          }
+        }
+      }, 50);
+
+      setConnectionState('connected');
+      
+      // Trigger initial greeting via the pipeline
+      processAIResponse("Hello! Please introduce yourself and start our conversation.");
 
         // 5. Track Session duration for free-tier limits
         sessionStartTimeRef.current = Date.now();
@@ -275,20 +315,27 @@ export default function VoiceAssistant() {
       mediaStreamRef.current = null;
     }
 
-    if (keepAliveRef.current) {
-      clearInterval(keepAliveRef.current);
-      keepAliveRef.current = null;
+    if (vadIntervalRef.current) {
+      clearInterval(vadIntervalRef.current);
+      vadIntervalRef.current = null;
+    }
+
+    if (silenceTimerRef.current) {
+      clearTimeout(silenceTimerRef.current);
+      silenceTimerRef.current = null;
+    }
+
+    if (isRecordingRef.current) {
+      stopRecording();
     }
 
     if (timerIntervalRef.current) {
-      window.clearInterval(timerIntervalRef.current as number);
+      window.clearInterval(timerIntervalRef.current);
       timerIntervalRef.current = null;
     }
 
-    if (dgSocketRef.current) {
-      dgSocketRef.current.close();
-      dgSocketRef.current = null;
-    }
+    // Ensure any internal states are fully reset
+    mediaRecorderRef.current = null;
 
     if (audioCtxRef.current) {
       audioCtxRef.current.close();
@@ -563,6 +610,31 @@ export default function VoiceAssistant() {
                 })}
               </div>
             </div>
+
+            {/* Test Voices */}
+            <div className="space-y-3">
+              <span className="text-[10px] font-bold text-blue-500 uppercase tracking-tight px-1 flex items-center gap-1">
+                <Sparkles className="w-3 h-3" /> Test Audio (Xiaomi Mimo)
+              </span>
+              <div className="flex flex-wrap gap-2">
+                {TEST_VOICES.map((v) => {
+                  const isActive = voice === v;
+                  return (
+                    <button
+                      key={v}
+                      onClick={() => setVoice(v)}
+                      className={`px-4 py-2 rounded-full text-sm font-medium transition-all duration-200 border ${isActive
+                        ? 'bg-blue-500 border-blue-500 text-white shadow-md'
+                        : 'bg-white border-stone-200 text-stone-600 hover:border-blue-200 hover:bg-blue-50'
+                        }`}
+                    >
+                      {VOICE_LABELS[v]}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
           </div>
 
         </div>
